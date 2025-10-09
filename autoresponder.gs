@@ -27,7 +27,7 @@ Best regards`,
   maxThreadsPerRun: 50,
   
   // Exclude domains/addresses from auto-reply
-  excludeDomains: ['noreply', 'no-reply', 'donotreply', 'mailer-daemon'],
+  excludeDomains: ['noreply', 'no-reply', 'donotreply', 'mailer-daemon', 'do-not-reply', 'notify', 'updates', 'newsletter', 'automated', 'bounce', 'postmaster', 'marketing'],
   
   // Timezone for working hours calculation (e.g., 'America/New_York', 'Europe/London')
   timezone: Session.getScriptTimeZone(),
@@ -73,12 +73,14 @@ function getMessageFromDraft() {
 function checkAndReplyToEmails() {
   const label = getOrCreateLabel(CONFIG.labelName);
   const autoReplyMessage = getAutoReplyMessage();
+  const triggerSetupTime = getTriggerSetupTime();
   
   // Get unread emails that haven't been auto-replied to
   const threads = GmailApp.search('is:unread -label:' + CONFIG.labelName, 0, CONFIG.maxThreadsPerRun);
   
   Logger.log(`Processing ${threads.length} thread(s)`);
   let repliedCount = 0;
+  let skippedCount = 0;
   
   threads.forEach(thread => {
     const messages = thread.getMessages();
@@ -88,24 +90,38 @@ function checkAndReplyToEmails() {
     if (latestMessage.isUnread() && shouldAutoReply(latestMessage)) {
       const receivedDate = latestMessage.getDate();
       
+      // Skip messages received before trigger was set up
+      if (triggerSetupTime && receivedDate < triggerSetupTime) {
+        Logger.log(`Skipped (before trigger setup): ${latestMessage.getFrom()}`);
+        skippedCount++;
+        return;
+      }
+      
       if (isOutsideWorkingHours(receivedDate)) {
         const sender = extractEmail(latestMessage.getFrom());
         
         // Check if we recently replied to this sender
         if (!hasRecentlyRepliedToSender(sender)) {
-          sendAutoReply(latestMessage, autoReplyMessage);
-          thread.addLabel(label);
-          recordReply(sender);
-          repliedCount++;
-          Logger.log(`Auto-replied to: ${latestMessage.getFrom()}`);
+          const replySent = sendAutoReply(latestMessage, autoReplyMessage);
+          
+          // Only apply label if reply was actually sent
+          if (replySent) {
+            thread.addLabel(label);
+            recordReply(sender);
+            repliedCount++;
+            Logger.log(`Auto-replied to: ${latestMessage.getFrom()}`);
+          }
         } else {
           Logger.log(`Skipped (recently replied): ${sender}`);
+          skippedCount++;
         }
+      } else {
+        skippedCount++;
       }
     }
   });
   
-  Logger.log(`Sent ${repliedCount} auto-reply/replies`);
+  Logger.log(`Sent ${repliedCount} auto-reply/replies, skipped ${skippedCount} thread(s)`);
 }
 
 /**
@@ -166,6 +182,7 @@ function shouldAutoReply(message) {
 
 /**
  * Send auto-reply to a message
+ * Returns true if reply was sent, false otherwise
  */
 function sendAutoReply(message, replyBody) {
   try {
@@ -173,8 +190,10 @@ function sendAutoReply(message, replyBody) {
     message.reply('', {
       htmlBody: replyBody
     });
+    return true;
   } catch (e) {
     Logger.log(`Error sending reply: ${e.message}`);
+    return false;
   }
 }
 
@@ -209,6 +228,24 @@ function recordReply(senderEmail) {
   const properties = PropertiesService.getScriptProperties();
   const key = 'lastReply_' + senderEmail;
   properties.setProperty(key, Date.now().toString());
+}
+
+/**
+ * Get the time when the trigger was set up
+ */
+function getTriggerSetupTime() {
+  const properties = PropertiesService.getScriptProperties();
+  const setupTime = properties.getProperty('triggerSetupTime');
+  return setupTime ? new Date(parseInt(setupTime)) : null;
+}
+
+/**
+ * Record the trigger setup time
+ */
+function recordTriggerSetupTime() {
+  const properties = PropertiesService.getScriptProperties();
+  properties.setProperty('triggerSetupTime', Date.now().toString());
+  Logger.log('✓ Trigger setup time recorded: ' + new Date().toLocaleString());
 }
 
 /**
@@ -301,6 +338,9 @@ function setupTrigger() {
     }
   });
   
+  // Record the setup time so we don't process old emails
+  recordTriggerSetupTime();
+  
   // Create a new trigger that runs every 5 minutes
   ScriptApp.newTrigger('checkAndReplyToEmails')
     .timeBased()
@@ -321,6 +361,7 @@ function setupTrigger() {
   }
   
   Logger.log('✓ Setup complete!');
+  Logger.log('Note: Only emails received AFTER this moment will be processed.');
 }
 
 /**
