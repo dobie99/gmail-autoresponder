@@ -12,9 +12,14 @@ const CONFIG = {
   draftSubjectLine: "Out of Hours Auto-Reply Template",
   
   // Fallback message if draft cannot be found
-  fallbackMessage: `Thank you for your email. I've received your message outside of my working hours and will respond during my next business day.
+  fallbackMessage: `Hi there,
 
-My working hours are Monday-Friday, 9:00 AM - 5:00 PM.
+Thanks for your email! I've received your message outside of my regular working hours.
+
+I'll review and respond to your email during my next business day.
+
+My working hours are:
+Monday - Friday: 9:00 AM - 5:00 PM
 
 Best regards`,
   
@@ -27,7 +32,7 @@ Best regards`,
   maxThreadsPerRun: 50,
   
   // Exclude domains/addresses from auto-reply
-  excludeDomains: ['noreply', 'no-reply', 'donotreply', 'mailer-daemon', 'do-not-reply', 'notify', 'updates', 'newsletter', 'automated', 'bounce', 'postmaster', 'marketing'],
+  excludeDomains: ['noreply', 'no-reply', 'donotreply', 'mailer-daemon'],
   
   // Timezone for working hours calculation (e.g., 'America/New_York', 'Europe/London')
   timezone: Session.getScriptTimeZone(),
@@ -74,6 +79,7 @@ function checkAndReplyToEmails() {
   const label = getOrCreateLabel(CONFIG.labelName);
   const autoReplyMessage = getAutoReplyMessage();
   const triggerSetupTime = getTriggerSetupTime();
+  const now = new Date();
   
   // Get unread emails that haven't been auto-replied to
   const threads = GmailApp.search('is:unread -label:' + CONFIG.labelName, 0, CONFIG.maxThreadsPerRun);
@@ -84,44 +90,60 @@ function checkAndReplyToEmails() {
   
   threads.forEach(thread => {
     const messages = thread.getMessages();
-    const latestMessage = messages[messages.length - 1]; // Get the most recent message
     
-    // Only process the latest message in the thread
-    if (latestMessage.isUnread() && shouldAutoReply(latestMessage)) {
-      const receivedDate = latestMessage.getDate();
-      
-      // Skip messages received before trigger was set up
-      if (triggerSetupTime && receivedDate < triggerSetupTime) {
-        Logger.log(`Skipped (before trigger setup): ${latestMessage.getFrom()}`);
-        skippedCount++;
-        return;
-      }
-      
-      if (isOutsideWorkingHours(receivedDate)) {
-        const sender = extractEmail(latestMessage.getFrom());
+    // Find the FIRST unread message in the thread that meets our criteria
+    let messageToReply = null;
+    
+    for (let message of messages) {
+      if (message.isUnread() && shouldAutoReply(message)) {
+        const receivedDate = message.getDate();
         
-        // Check if we recently replied to this sender
-        if (!hasRecentlyRepliedToSender(sender)) {
-          const replySent = sendAutoReply(latestMessage, autoReplyMessage);
-          
-          // Only apply label if reply was actually sent
-          if (replySent) {
-            thread.addLabel(label);
-            recordReply(sender);
-            repliedCount++;
-            Logger.log(`Auto-replied to: ${latestMessage.getFrom()}`);
-          }
-        } else {
-          Logger.log(`Skipped (recently replied): ${sender}`);
+        // Skip messages received before trigger was set up
+        if (triggerSetupTime && receivedDate < triggerSetupTime) {
+          Logger.log(`Skipped (before trigger setup): ${message.getFrom()}`);
           skippedCount++;
+          continue;
+        }
+        
+        // Check if email is too old
+        const hoursOld = (now - receivedDate) / (1000 * 60 * 60);
+        if (hoursOld > CONFIG.maxEmailAge) {
+          Logger.log(`Skipped (too old, ${hoursOld.toFixed(1)}h): ${message.getFrom()}`);
+          skippedCount++;
+          continue;
+        }
+        
+        // Check if it's outside working hours
+        if (isOutsideWorkingHours(receivedDate)) {
+          messageToReply = message;
+          break; // Found the first eligible message
+        }
+      }
+    }
+    
+    // If we found a message to reply to, send the reply
+    if (messageToReply) {
+      const sender = extractEmail(messageToReply.getFrom());
+      
+      // Check if we recently replied to this sender
+      if (!hasRecentlyRepliedToSender(sender)) {
+        const replySent = sendAutoReply(messageToReply, autoReplyMessage);
+        
+        // Only apply label if reply was actually sent
+        if (replySent) {
+          thread.addLabel(label);
+          recordReply(sender);
+          repliedCount++;
+          Logger.log(`Auto-replied to: ${messageToReply.getFrom()} (received ${messageToReply.getDate()})`);
         }
       } else {
+        Logger.log(`Skipped (recently replied): ${sender}`);
         skippedCount++;
       }
     }
   });
   
-  Logger.log(`Sent ${repliedCount} auto-reply/replies, skipped ${skippedCount} thread(s)`);
+  Logger.log(`Sent ${repliedCount} auto-reply/replies, skipped ${skippedCount} message(s)`);
 }
 
 /**
@@ -152,8 +174,15 @@ function isOutsideWorkingHours(date) {
  */
 function shouldAutoReply(message) {
   const from = message.getFrom().toLowerCase();
+  const senderEmail = extractEmail(from);
   
-  // Check excluded domains
+  // Check excluded email addresses (exact match)
+  if (CONFIG.excludeAddresses.some(addr => addr.toLowerCase() === senderEmail)) {
+    Logger.log(`Skipped (excluded address): ${from}`);
+    return false;
+  }
+  
+  // Check excluded domains (contains match)
   for (let excluded of CONFIG.excludeDomains) {
     if (from.includes(excluded.toLowerCase())) {
       Logger.log(`Skipped (excluded domain): ${from}`);
@@ -293,6 +322,7 @@ function testAutoReplyMessage() {
   Logger.log(`Working days: ${CONFIG.workingDays.join(', ')} (1=Mon, 7=Sun)`);
   Logger.log(`Timezone: ${CONFIG.timezone}`);
   Logger.log(`Reply window: ${CONFIG.replyWindow} hours`);
+  Logger.log(`Max email age: ${CONFIG.maxEmailAge} hours`);
   Logger.log(`Max threads per run: ${CONFIG.maxThreadsPerRun}`);
   Logger.log("");
   
@@ -320,6 +350,12 @@ function testAutoReplyMessage() {
   Logger.log("");
   Logger.log("=== EXCLUDED DOMAINS ===");
   Logger.log(CONFIG.excludeDomains.join(', '));
+  
+  if (CONFIG.excludeAddresses.length > 0) {
+    Logger.log("");
+    Logger.log("=== EXCLUDED ADDRESSES ===");
+    Logger.log(CONFIG.excludeAddresses.join(', '));
+  }
 }
 
 /**
