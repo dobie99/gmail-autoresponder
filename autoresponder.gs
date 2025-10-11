@@ -27,12 +27,20 @@ Best regards`,
   
   // Time window to prevent duplicate replies (in hours)
   replyWindow: 24, // Don't send another auto-reply to the same sender within 24 hours
-  
+
+  // Maximum age of email to auto-reply to (in hours)
+  maxEmailAge: 8, // Don't reply to emails older than 8 hours
+
   // Maximum number of threads to process per run (to avoid quota limits)
   maxThreadsPerRun: 50,
   
   // Exclude domains/addresses from auto-reply
-  excludeDomains: ['noreply', 'no-reply', 'donotreply', 'mailer-daemon'],
+  excludeDomains: ['noreply', 'no-reply', 'donotreply', 'mailer-daemon', 'do-not-reply', 'notify', 'updates', 'newsletter', 'automated', 'bounce', 'postmaster', 'marketing'],
+  excludeAddresses: [
+  // 'boss@company.com',
+  // 'important-client@example.com',
+],
+
   
   // Timezone for working hours calculation (e.g., 'America/New_York', 'Europe/London')
   timezone: Session.getScriptTimeZone(),
