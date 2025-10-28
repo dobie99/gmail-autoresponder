@@ -285,4 +285,4 @@ If you encounter issues:
 
 ---
 
-Made with ☕ by [Your Name]
+Made with ☕ by dobie99 & Claude
